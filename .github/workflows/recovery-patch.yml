@@ -73,8 +73,21 @@ jobs:
       - name: Clone AIK-Linux
         run: |
           set -euxo pipefail
-          # Use public clone instead of authenticated to avoid potential token issues
-          git clone --depth=1 https://github.com/osm0sis/AIK-Linux.git work/AIK
+          # Try multiple methods to clone AIK-Linux
+          if ! git clone --depth=1 https://github.com/osm0sis/AIK-Linux.git work/AIK; then
+            echo "🔄 Retrying clone with different method..."
+            sleep 5
+            git clone --depth=1 --config http.version=HTTP/1.1 https://github.com/osm0sis/AIK-Linux.git work/AIK || \
+            git clone --depth=1 --no-single-branch https://github.com/osm0sis/AIK-Linux.git work/AIK
+          fi
+          
+          # Verify clone succeeded
+          if [ ! -d work/AIK ]; then
+            echo "❌ Failed to clone AIK-Linux repository" >&2
+            exit 1
+          fi
+          
+          echo "✅ AIK-Linux cloned successfully"
           
       - name: Unpack recovery
         run: |
