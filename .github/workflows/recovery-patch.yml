@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       RECOVERY_URL:
-        description: "Google Drive URL to recovery.img or recovery.img.lz4"
+        description: "Direct Google Drive download link (uc?export=download&id=...)"
         required: true
       IMAGE_NAME:
         description: "Base name for outputs (no extension)"
@@ -33,27 +33,39 @@ jobs:
           mkdir -p work/in work/out
           echo "${{ github.event.inputs.RECOVERY_URL }}" > work/URL.txt
 
-      - name: Convert Google Drive link to direct download
+      - name: Download and validate recovery image
         run: |
           set -euxo pipefail
-          RAW_URL="$(cat work/URL.txt)"
-          FILE_ID="$(echo "$RAW_URL" | grep -oP '(?<=/d/)[^/]+')"
-          [[ -z "$FILE_ID" ]] && { echo "❌ Invalid Google Drive URL"; exit 1; }
-          echo "https://drive.google.com/uc?export=download&id=$FILE_ID" > work/DIRECT_URL.txt
-
-      - name: Download recovery image
-        run: |
-          set -euxo pipefail
-          URL="$(cat work/DIRECT_URL.txt)"
+          URL="$(cat work/URL.txt)"
           cd work/in
           echo "📥 Downloading: $URL"
           curl -L --fail --retry 4 --connect-timeout 20 "$URL" -o recovery.img
+
+          echo "🔍 Checking file type..."
           file recovery.img | tee ../recovery.file.txt
           sha256sum recovery.img | tee ../recovery.sha256.txt
-          file recovery.img | grep -q 'Android boot image' || {
-            echo "❌ Not a valid recovery image." >&2
+
+          # Decompress if LZ4
+          case "$(file -b recovery.img)" in
+            *LZ4*) 
+              echo "🧩 Detected LZ4 compression. Decompressing..."
+              lz4 -d -f recovery.img recovery.raw.img
+              ;;
+            *)
+              echo "📦 No compression detected. Copying as-is..."
+              cp -f recovery.img recovery.raw.img
+              ;;
+          esac
+
+          echo "🔍 Validating decompressed image..."
+          file recovery.raw.img | tee ../recovery.raw.file.txt
+          file recovery.raw.img | grep -q 'Android boot image' || {
+            echo "❌ Not a valid Android recovery image." >&2
             exit 2
           }
+
+          # Replace original for downstream steps
+          mv -f recovery.raw.img recovery.img
 
       - name: Clone AIK-Linux
         run: |
