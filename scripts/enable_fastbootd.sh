@@ -12,7 +12,7 @@ cd "$AIK_DIR"
 
 echo "[*] Enabling fastbootd…"
 
-# 1) Mark fastbootd available in common prop files
+# 1) Ensure fastbootd is marked available in common prop files
 PROP_FILES=(
   "ramdisk/default.prop"
   "ramdisk/system/etc/prop.default"
@@ -30,7 +30,7 @@ for pf in "${PROP_FILES[@]}"; do
   fi
 done
 
-# 2) Inject fastbootd service if missing
+# 2) Inject a minimal fastbootd service if it doesn't exist
 INIT_CANDIDATES=(
   "ramdisk/init.recovery.rc"
   "ramdisk/etc/init.recovery.rc"
