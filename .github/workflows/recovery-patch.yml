@@ -71,27 +71,12 @@ jobs:
           mv -f recovery.raw.img recovery.img
           
       - name: Download AIK-Linux
-        run: |
-          set -euxo pipefail
-          cd work
-          echo "📥 Downloading AIK-Linux as ZIP..."
-          curl -L --fail --retry 3 --connect-timeout 20 \
-            "https://github.com/osm0sis/Android-Image-Kitchen/archive/AIK-Linux.zip" -o AIK.zip
-          
-          echo "📦 Extracting AIK-Linux..."
-          unzip -q AIK.zip
-          mv Android-Image-Kitchen-AIK-Linux AIK
-          rm AIK.zip
-          
-          # Verify download succeeded
-          if [ ! -d AIK ] || [ ! -f AIK/unpackimg.sh ]; then
-            echo "❌ Failed to download or extract AIK-Linux" >&2
-            exit 1
-          fi
-          
-          # Make scripts executable
-          chmod +x AIK/*.sh
-          echo "✅ AIK-Linux downloaded and extracted successfully"
+        uses: actions/checkout@v4
+        with:
+          repository: osm0sis/Android-Image-Kitchen
+          ref: AIK-Linux
+          path: work/AIK
+          depth: 1
           
       - name: Unpack recovery
         run: |
