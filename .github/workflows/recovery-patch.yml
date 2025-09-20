@@ -50,69 +50,39 @@ jobs:
           sha256sum recovery.img | tee ../recovery.sha256.txt
           file recovery.img       | tee ../recovery.file.txt
 
-      - name: Fetch Android Image Kitchen (AIK)
+      # Clone the Linux version of AIK
+      - name: Fetch AIK-Linux
         run: |
           set -euxo pipefail
           cd work
-          git clone --depth=1 https://github.com/osm0sis/Android-Image-Kitchen.git AIK
+          git clone --depth=1 https://github.com/osm0sis/AIK-Linux.git AIK
 
       - name: Unpack recovery with AIK
         run: |
           set -euxo pipefail
-          cd work
-          ls -la AIK || true
-          if [ -d AIK/AIK-Linux ]; then
-            AIK_SCRIPTS="AIK/AIK-Linux"
-          elif [ -f AIK/unpackimg.sh ]; then
-            AIK_SCRIPTS="AIK"
-          else
-            echo "Could not find AIK scripts (unpackimg.sh)" >&2
-            find AIK -maxdepth 2 -type f -name "unpackimg.sh" -print || true
-            exit 2
-          fi
-          echo "Using AIK scripts at: $AIK_SCRIPTS"
-          echo "AIK_SCRIPTS=$AIK_SCRIPTS" >> "$GITHUB_ENV"
-          cp -f in/recovery.img "$AIK_SCRIPTS/recovery.img"
-          bash "$AIK_SCRIPTS/cleanup.sh" || true
-          bash "$AIK_SCRIPTS/unpackimg.sh" "$AIK_SCRIPTS/recovery.img"
-          test -d "$AIK_SCRIPTS/ramdisk" || { echo "Unpack failed: no ramdisk." >&2; exit 2; }
+          cd work/AIK
+          cp -f ../in/recovery.img ./recovery.img
+          bash cleanup.sh || true
+          bash unpackimg.sh ./recovery.img
+          test -d ramdisk || { echo "Unpack failed: no ramdisk." >&2; exit 2; }
 
       - name: Run patch script
         run: |
           set -euxo pipefail
           chmod +x scripts/enable_fastbootd.sh
-          ./scripts/enable_fastbootd.sh "work/${{ env.AIK_SCRIPTS }}"
+          ./scripts/enable_fastbootd.sh work/AIK
 
       - name: Repack recovery with AIK
         run: |
           set -euxo pipefail
-          cd "work/${{ env.AIK_SCRIPTS }}"
+          cd work/AIK
           bash repackimg.sh
           test -f image-new.img
-          mv -f image-new.img ../../out/patched-recovery.img
+          mv -f image-new.img ../out/patched-recovery.img
 
       - name: Package outputs (IMG/TAR/ZIP)
         run: |
           set -euxo pipefail
           cd work/out
           BASENAME="${{ github.event.inputs.IMAGE_NAME }}"
-          mv -f patched-recovery.img "${BASENAME}.img"
-          tar --format=ustar -cf "${BASENAME}.tar" "${BASENAME}.img"
-          md5sum -t "${BASENAME}.tar" | awk '{print $1}' > "${BASENAME}.tar.md5"
-          cat "${BASENAME}.tar.md5" >> "${BASENAME}.tar"
-          zip -9r "${BASENAME}.zip" "${BASENAME}.img" "${BASENAME}.tar"
-          cp -f ../recovery.sha256.txt .
-          cp -f ../recovery.file.txt   .
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Patched-Recovery
-          path: |
-            work/out/*.img
-            work/out/*.tar
-            work/out/*.zip
-            work/out/*sha256*.txt
-            work/out/*file*.txt
-          if-no-files-found: error
-
+          mv -f patched-recovery.img "${BASENAM
