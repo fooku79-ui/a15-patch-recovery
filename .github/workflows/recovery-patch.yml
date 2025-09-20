@@ -25,7 +25,7 @@ jobs:
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y \
-            lz4 zip unzip tar coreutils p7zip-full git xz-utils gawk sed grep file curl
+            lz4 zip unzip tar coreutils p7zip-full git xz-utils gawk sed grep file curl openssl
 
       - name: Prepare workspace
         run: |
@@ -50,12 +50,13 @@ jobs:
           sha256sum recovery.img | tee ../recovery.sha256.txt
           file recovery.img       | tee ../recovery.file.txt
 
-      # Clone the Linux version of AIK
+      # ⬇️ Fetch AIK-Linux using actions/checkout (avoids auth header issue)
       - name: Fetch AIK-Linux
-        run: |
-          set -euxo pipefail
-          cd work
-          git clone --depth=1 https://github.com/osm0sis/AIK-Linux.git AIK
+        uses: actions/checkout@v4
+        with:
+          repository: osm0sis/AIK-Linux
+          path: work/AIK
+          fetch-depth: 1
 
       - name: Unpack recovery with AIK
         run: |
@@ -85,4 +86,17 @@ jobs:
           set -euxo pipefail
           cd work/out
           BASENAME="${{ github.event.inputs.IMAGE_NAME }}"
-          mv -f patched-recovery.img "${BASENAM
+          mv -f patched-recovery.img "${BASENAME}.img"
+          tar --format=ustar -cf "${BASENAME}.tar" "${BASENAME}.img"
+          md5sum -t "${BASENAME}.tar" | awk '{print $1}' > "${BASENAME}.tar.md5"
+          cat "${BASENAME}.tar.md5" >> "${BASENAME}.tar"
+          zip -9r "${BASENAME}.zip" "${BASENAME}.img" "${BASENAME}.tar"
+          cp -f ../recovery.sha256.txt .
+          cp -f ../recovery.file.txt   .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Patched-Recovery
+          path: work/out/*
+          if-no-files-found: error
