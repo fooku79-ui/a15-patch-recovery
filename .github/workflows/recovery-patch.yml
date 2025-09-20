@@ -1,5 +1,4 @@
 name: RECOVERY
-
 on:
   workflow_dispatch:
     inputs:
@@ -15,24 +14,23 @@ jobs:
   patch-recovery:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-
     steps:
       - name: Checkout your repo
         uses: actions/checkout@v4
-
+        
       - name: Install dependencies
         run: |
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y \
             lz4 zip unzip tar coreutils p7zip-full git xz-utils gawk sed grep file curl openssl
-
+            
       - name: Prepare workspace
         run: |
           set -euxo pipefail
           mkdir -p work/in work/out
           echo "${{ github.event.inputs.RECOVERY_URL }}" > work/URL.txt
-
+          
       - name: Download and validate recovery image
         run: |
           set -euxo pipefail
@@ -40,11 +38,11 @@ jobs:
           cd work/in
           echo "📥 Downloading: $URL"
           curl -L --fail --retry 4 --connect-timeout 20 "$URL" -o recovery.img
-
+          
           echo "🔍 Checking file type..."
           file recovery.img | tee ../recovery.file.txt
           sha256sum recovery.img | tee ../recovery.sha256.txt
-
+          
           # Decompress if LZ4
           case "$(file -b recovery.img)" in
             *LZ4*) 
@@ -56,22 +54,28 @@ jobs:
               cp -f recovery.img recovery.raw.img
               ;;
           esac
-
+          
           echo "🔍 Validating decompressed image..."
           file recovery.raw.img | tee ../recovery.raw.file.txt
-          file recovery.raw.img | grep -q 'Android boot image' || {
+          
+          # Fixed validation - handles both "Android boot image" and "Android bootimg" formats
+          if ! file recovery.raw.img | grep -q -E "(Android boot|Android bootimg)"; then
             echo "❌ Not a valid Android recovery image." >&2
+            echo "File type detected: $(file -b recovery.raw.img)" >&2
             exit 2
-          }
-
+          fi
+          
+          echo "✅ Valid Android recovery image detected!"
+          
           # Replace original for downstream steps
           mv -f recovery.raw.img recovery.img
-
+          
       - name: Clone AIK-Linux
         run: |
           set -euxo pipefail
-          git clone --depth=1 https://${{ secrets.GITHUB_TOKEN }}@github.com/osm0sis/AIK-Linux.git work/AIK
-
+          # Use public clone instead of authenticated to avoid potential token issues
+          git clone --depth=1 https://github.com/osm0sis/AIK-Linux.git work/AIK
+          
       - name: Unpack recovery
         run: |
           set -euxo pipefail
@@ -79,39 +83,74 @@ jobs:
           cp -f ../in/recovery.img ./recovery.img
           bash cleanup.sh || true
           bash unpackimg.sh ./recovery.img
-          test -d ramdisk || { echo "❌ Unpack failed: no ramdisk." >&2; exit 3; }
-
+          
+          # Verify unpacking succeeded
+          if [ ! -d ramdisk ]; then
+            echo "❌ Unpack failed: no ramdisk directory found." >&2
+            echo "Contents of AIK directory:" >&2
+            ls -la . >&2
+            exit 3
+          fi
+          
+          echo "✅ Recovery image unpacked successfully!"
+          
       - name: Patch recovery
         run: |
           set -euxo pipefail
+          if [ ! -f scripts/enable_fastbootd.sh ]; then
+            echo "❌ Patch script not found: scripts/enable_fastbootd.sh" >&2
+            exit 4
+          fi
+          
           chmod +x scripts/enable_fastbootd.sh
           ./scripts/enable_fastbootd.sh work/AIK
-
+          echo "✅ Recovery patching completed!"
+          
       - name: Repack recovery
         run: |
           set -euxo pipefail
           cd work/AIK
           bash repackimg.sh
-          test -f image-new.img
+          
+          if [ ! -f image-new.img ]; then
+            echo "❌ Repack failed: image-new.img not found." >&2
+            echo "Contents of AIK directory:" >&2
+            ls -la . >&2
+            exit 5
+          fi
+          
           mv -f image-new.img ../out/patched-recovery.img
-
+          echo "✅ Recovery image repacked successfully!"
+          
       - name: Package outputs
         run: |
           set -euxo pipefail
           cd work/out
           BASENAME="${{ github.event.inputs.IMAGE_NAME }}"
+          
+          # Rename the main image file
           mv -f patched-recovery.img "${BASENAME}.img"
+          
+          # Create TAR with MD5 checksum (Odin format)
           tar --format=ustar -cf "${BASENAME}.tar" "${BASENAME}.img"
           md5sum -t "${BASENAME}.tar" | awk '{print $1}' > "${BASENAME}.tar.md5"
           cat "${BASENAME}.tar.md5" >> "${BASENAME}.tar"
+          
+          # Create ZIP archive
           zip -9r "${BASENAME}.zip" "${BASENAME}.img" "${BASENAME}.tar"
+          
+          # Copy metadata files
           cp -f ../recovery.sha256.txt .
-          cp -f ../recovery.file.txt   .
-
+          cp -f ../recovery.file.txt .
+          cp -f ../recovery.raw.file.txt . 2>/dev/null || true
+          
+          echo "✅ Output packages created!"
+          echo "Files created:"
+          ls -lh .
+          
       - name: Upload patched recovery
         uses: actions/upload-artifact@v4
         with:
-          name: Patched-Recovery
+          name: ${{ github.event.inputs.IMAGE_NAME }}-Recovery
           path: work/out/*
           if-no-files-found: error
-
