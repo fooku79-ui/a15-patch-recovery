@@ -78,6 +78,33 @@ jobs:
           path: work/AIK
           depth: 1
           
+      - name: Setup AIK-Linux binaries
+        run: |
+          set -euxo pipefail
+          cd work/AIK
+          
+          # Download precompiled binaries
+          echo "📥 Downloading AIK binaries..."
+          curl -L --fail --retry 3 \
+            "https://github.com/osm0sis/Android-Image-Kitchen/releases/download/v3.8-AIK-Linux/AIK-Linux-v3.8.tar.gz" \
+            -o AIK-Linux.tar.gz
+          
+          # Extract only the bin directory
+          echo "📦 Extracting binaries..."
+          tar -xzf AIK-Linux.tar.gz --strip-components=1 "*/bin"
+          rm AIK-Linux.tar.gz
+          
+          # Make binaries executable
+          chmod -R +x bin/ 2>/dev/null || true
+          
+          # Verify critical binary exists
+          if [ ! -f bin/linux/x86_64/unpackbootimg ]; then
+            echo "❌ Critical binary missing: unpackbootimg" >&2
+            exit 1
+          fi
+          
+          echo "✅ AIK binaries setup complete"
+          
       - name: Unpack recovery
         run: |
           set -euxo pipefail
