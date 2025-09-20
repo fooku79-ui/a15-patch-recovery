@@ -56,28 +56,40 @@ jobs:
           cd work
           git clone --depth=1 https://github.com/osm0sis/Android-Image-Kitchen.git AIK
 
-      # ✅ point at AIK/AIK-Linux
+      # --- Auto-detect where AIK scripts live (AIK/AIK-Linux or AIK/) ---
       - name: Unpack recovery with AIK
         run: |
           set -euxo pipefail
           cd work
-          cp -f in/recovery.img AIK/AIK-Linux/recovery.img
-          bash AIK/AIK-Linux/cleanup.sh || true
-          bash AIK/AIK-Linux/unpackimg.sh AIK/AIK-Linux/recovery.img
-          test -d AIK/AIK-Linux/ramdisk || { echo "Unpack failed: no ramdisk." >&2; exit 2; }
+          ls -la AIK || true
+          if [ -d AIK/AIK-Linux ]; then
+            AIK_SCRIPTS="AIK/AIK-Linux"
+          elif [ -f AIK/unpackimg.sh ]; then
+            AIK_SCRIPTS="AIK"
+          else
+            echo "Could not find AIK scripts (unpackimg.sh)" >&2
+            find AIK -maxdepth 2 -type f -name "unpackimg.sh" -print || true
+            exit 2
+          fi
+          echo "Using AIK scripts at: $AIK_SCRIPTS"
+          cp -f in/recovery.img "$AIK_SCRIPTS/recovery.img"
+          bash "$AIK_SCRIPTS/cleanup.sh" || true
+          bash "$AIK_SCRIPTS/unpackimg.sh" "$AIK_SCRIPTS/recovery.img"
+          test -d "$AIK_SCRIPTS/ramdisk" || { echo "Unpack failed: no ramdisk." >&2; exit 2; }
+          echo "AIK_SCRIPTS=$AIK_SCRIPTS" >> "$GITHUB_ENV"
 
-      # ✅ run your patch against AIK/AIK-Linux
       - name: Run patch script
         run: |
           set -euxo pipefail
+          : "${AIK_SCRIPTS:?AIK_SCRIPTS not set}"
           chmod +x scripts/enable_fastbootd.sh
-          ./scripts/enable_fastbootd.sh work/AIK/AIK-Linux
+          ./scripts/enable_fastbootd.sh "work/${AIK_SCRIPTS}"
 
-      # ✅ repack from AIK/AIK-Linux and move out
       - name: Repack recovery with AIK
         run: |
           set -euxo pipefail
-          cd work/AIK/AIK-Linux
+          : "${AIK_SCRIPTS:?AIK_SCRIPTS not set}"
+          cd "work/${AIK_SCRIPTS}"
           bash repackimg.sh
           test -f image-new.img
           mv -f image-new.img ../../out/patched-recovery.img
