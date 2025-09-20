@@ -76,11 +76,11 @@ jobs:
           cd work
           echo "📥 Downloading AIK-Linux as ZIP..."
           curl -L --fail --retry 3 --connect-timeout 20 \
-            "https://github.com/osm0sis/AIK-Linux/archive/main.zip" -o AIK.zip
+            "https://github.com/osm0sis/Android-Image-Kitchen/archive/AIK-Linux.zip" -o AIK.zip
           
           echo "📦 Extracting AIK-Linux..."
           unzip -q AIK.zip
-          mv AIK-Linux-main AIK
+          mv Android-Image-Kitchen-AIK-Linux AIK
           rm AIK.zip
           
           # Verify download succeeded
