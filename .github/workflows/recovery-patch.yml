@@ -1,4 +1,5 @@
-name: RECOVERY
+name: Patch Android Recovery
+
 on:
   workflow_dispatch:
     inputs:
@@ -6,88 +7,82 @@ on:
         description: "Direct Google Drive download link (uc?export=download&id=...)"
         required: true
       IMAGE_NAME:
-        description: "Base name for outputs (no extension)"
+        description: "Base name for output files (without extension)"
         required: false
         default: "patched-recovery"
 
 jobs:
   patch-recovery:
+    name: Patch Recovery Image
     runs-on: ubuntu-latest
     timeout-minutes: 45
+
     steps:
-      - name: Checkout your repo
+      - name: Checkout Repository
         uses: actions/checkout@v4
-        
-      - name: Install dependencies
+
+      - name: Install Dependencies
         run: |
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y \
-            lz4 zip unzip tar coreutils p7zip-full git xz-utils gawk sed grep file curl openssl
-            
-      - name: Prepare workspace
+            lz4 zip unzip tar coreutils p7zip-full git xz-utils \
+            gawk sed grep file curl openssl build-essential gcc g++ make
+
+      - name: Prepare Workspace
         run: |
           set -euxo pipefail
           mkdir -p work/in work/out
           echo "${{ github.event.inputs.RECOVERY_URL }}" > work/URL.txt
-          
-      - name: Download and validate recovery image
+
+      - name: Download & Validate Recovery Image
         run: |
           set -euxo pipefail
           URL="$(cat work/URL.txt)"
           cd work/in
           echo "📥 Downloading: $URL"
           curl -L --fail --retry 4 --connect-timeout 20 "$URL" -o recovery.img
-          
+
           echo "🔍 Checking file type..."
           file recovery.img | tee ../recovery.file.txt
           sha256sum recovery.img | tee ../recovery.sha256.txt
-          
-          # Decompress if LZ4
+
           case "$(file -b recovery.img)" in
             *LZ4*) 
-              echo "🧩 Detected LZ4 compression. Decompressing..."
+              echo "🧩 LZ4 compression detected. Decompressing..."
               lz4 -d -f recovery.img recovery.raw.img
               ;;
             *)
-              echo "📦 No compression detected. Copying as-is..."
-              cp -f recovery.img recovery.raw.img
+              echo "📦 No compression detected. Using as-is..."
+              cp recovery.img recovery.raw.img
               ;;
           esac
-          
+
           echo "🔍 Validating decompressed image..."
           file recovery.raw.img | tee ../recovery.raw.file.txt
-          
-          # Fixed validation - handles both "Android boot image" and "Android bootimg" formats
+
           if ! file recovery.raw.img | grep -q -E "(Android boot|Android bootimg)"; then
-            echo "❌ Not a valid Android recovery image." >&2
-            echo "File type detected: $(file -b recovery.raw.img)" >&2
+            echo "❌ Invalid Android recovery image." >&2
+            file -b recovery.raw.img >&2
             exit 2
           fi
-          
-          echo "✅ Valid Android recovery image detected!"
-          
-          # Replace original for downstream steps
+
+          echo "✅ Valid Android recovery image confirmed."
           mv -f recovery.raw.img recovery.img
-          
-      - name: Download AIK-Linux
+
+      - name: Download AIK (Android Image Kitchen)
         uses: actions/checkout@v4
         with:
           repository: osm0sis/Android-Image-Kitchen
           ref: AIK-Linux
           path: work/AIK
           fetch-depth: 1
-          
-      - name: Build AIK-Linux binaries
+
+      - name: Build AIK Binaries
         run: |
           set -euxo pipefail
           cd work/AIK
-          
-          # Install build dependencies
-          sudo apt-get update
-          sudo apt-get install -y build-essential gcc g++ make
-          
-          # Build the binaries
+
           echo "🔧 Building AIK binaries..."
           if [ -f Makefile ]; then
             make
@@ -95,95 +90,91 @@ jobs:
             cd src
             make
           else
-            # Manual build if no Makefile
-            echo "Building unpackbootimg..."
-            gcc -o bin/linux/x86_64/unpackbootimg src/unpackbootimg.c || \
-            gcc -o unpackbootimg unpackbootimg.c && mkdir -p bin/linux/x86_64 && mv unpackbootimg bin/linux/x86_64/
+            echo "📄 Building unpackbootimg manually..."
+            gcc -o unpackbootimg unpackbootimg.c || {
+              echo "❌ Failed to compile unpackbootimg" >&2
+              exit 1
+            }
+            mkdir -p ../bin/linux/x86_64
+            mv unpackbootimg ../bin/linux/x86_64/
           fi
-          
-          # Verify the binary was created
-          if [ ! -f bin/linux/x86_64/unpackbootimg ]; then
-            echo "❌ Failed to build unpackbootimg" >&2
+
+          [ -f bin/linux/x86_64/unpackbootimg ] || {
+            echo "❌ Binary not found: unpackbootimg" >&2
             exit 1
-          fi
-          
-          # Make executable
+          }
+
           chmod +x bin/linux/x86_64/unpackbootimg
-          echo "✅ AIK binaries built successfully"
-          
-      - name: Unpack recovery
+          echo "✅ AIK binaries built successfully."
+
+      - name: Unpack Recovery
         run: |
           set -euxo pipefail
           cd work/AIK
-          cp -f ../in/recovery.img ./recovery.img
+          cp ../in/recovery.img recovery.img
           bash cleanup.sh || true
-          bash unpackimg.sh ./recovery.img
-          
-          # Verify unpacking succeeded
+          bash unpackimg.sh recovery.img
+
           if [ ! -d ramdisk ]; then
-            echo "❌ Unpack failed: no ramdisk directory found." >&2
-            echo "Contents of AIK directory:" >&2
+            echo "❌ Unpack failed: ramdisk directory missing." >&2
             ls -la . >&2
             exit 3
           fi
-          
-          echo "✅ Recovery image unpacked successfully!"
-          
-      - name: Patch recovery
+
+          echo "✅ Recovery unpacked successfully."
+
+      - name: Patch Recovery
         run: |
           set -euxo pipefail
-          if [ ! -f scripts/enable_fastbootd.sh ]; then
-            echo "❌ Patch script not found: scripts/enable_fastbootd.sh" >&2
+          SCRIPT="scripts/enable_fastbootd.sh"
+
+          if [ ! -f "$SCRIPT" ]; then
+            echo "❌ Patch script not found: $SCRIPT" >&2
             exit 4
           fi
-          
-          chmod +x scripts/enable_fastbootd.sh
-          ./scripts/enable_fastbootd.sh work/AIK
-          echo "✅ Recovery patching completed!"
-          
-      - name: Repack recovery
+
+          chmod +x "$SCRIPT"
+          "./$SCRIPT" work/AIK
+          echo "✅ Patch applied successfully."
+
+      - name: Repack Recovery
         run: |
           set -euxo pipefail
           cd work/AIK
           bash repackimg.sh
-          
+
           if [ ! -f image-new.img ]; then
             echo "❌ Repack failed: image-new.img not found." >&2
-            echo "Contents of AIK directory:" >&2
             ls -la . >&2
             exit 5
           fi
-          
-          mv -f image-new.img ../out/patched-recovery.img
-          echo "✅ Recovery image repacked successfully!"
-          
-      - name: Package outputs
+
+          mv image-new.img ../out/patched-recovery.img
+          echo "✅ Recovery repacked successfully."
+
+      - name: Package Output Files
         run: |
           set -euxo pipefail
           cd work/out
           BASENAME="${{ github.event.inputs.IMAGE_NAME }}"
-          
-          # Rename the main image file
-          mv -f patched-recovery.img "${BASENAME}.img"
-          
-          # Create TAR with MD5 checksum (Odin format)
+
+          mv patched-recovery.img "${BASENAME}.img"
+
           tar --format=ustar -cf "${BASENAME}.tar" "${BASENAME}.img"
           md5sum -t "${BASENAME}.tar" | awk '{print $1}' > "${BASENAME}.tar.md5"
           cat "${BASENAME}.tar.md5" >> "${BASENAME}.tar"
-          
-          # Create ZIP archive
+
           zip -9r "${BASENAME}.zip" "${BASENAME}.img" "${BASENAME}.tar"
-          
-          # Copy metadata files
-          cp -f ../recovery.sha256.txt .
-          cp -f ../recovery.file.txt .
-          cp -f ../recovery.raw.file.txt . 2>/dev/null || true
-          
-          echo "✅ Output packages created!"
-          echo "Files created:"
+
+          cp ../recovery.sha256.txt .
+          cp ../recovery.file.txt .
+          cp ../recovery.raw.file.txt . 2>/dev/null || true
+
+          echo "✅ Output packaging complete."
+          echo "📦 Created files:"
           ls -lh .
-          
-      - name: Upload patched recovery
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ github.event.inputs.IMAGE_NAME }}-Recovery
