@@ -25,7 +25,7 @@ jobs:
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y \
-            lz4 zip unzip tar coreutils p7zip-full git xz-utils gawk sed grep file
+            lz4 zip unzip tar coreutils p7zip-full git xz-utils gawk sed grep file curl
 
       - name: Prepare workspace
         run: |
@@ -56,7 +56,6 @@ jobs:
           cd work
           git clone --depth=1 https://github.com/osm0sis/Android-Image-Kitchen.git AIK
 
-      # --- Auto-detect where AIK scripts live (AIK/AIK-Linux or AIK/) ---
       - name: Unpack recovery with AIK
         run: |
           set -euxo pipefail
@@ -72,24 +71,22 @@ jobs:
             exit 2
           fi
           echo "Using AIK scripts at: $AIK_SCRIPTS"
+          echo "AIK_SCRIPTS=$AIK_SCRIPTS" >> "$GITHUB_ENV"
           cp -f in/recovery.img "$AIK_SCRIPTS/recovery.img"
           bash "$AIK_SCRIPTS/cleanup.sh" || true
           bash "$AIK_SCRIPTS/unpackimg.sh" "$AIK_SCRIPTS/recovery.img"
           test -d "$AIK_SCRIPTS/ramdisk" || { echo "Unpack failed: no ramdisk." >&2; exit 2; }
-          echo "AIK_SCRIPTS=$AIK_SCRIPTS" >> "$GITHUB_ENV"
 
       - name: Run patch script
         run: |
           set -euxo pipefail
-          : "${AIK_SCRIPTS:?AIK_SCRIPTS not set}"
           chmod +x scripts/enable_fastbootd.sh
-          ./scripts/enable_fastbootd.sh "work/${AIK_SCRIPTS}"
+          ./scripts/enable_fastbootd.sh "work/${{ env.AIK_SCRIPTS }}"
 
       - name: Repack recovery with AIK
         run: |
           set -euxo pipefail
-          : "${AIK_SCRIPTS:?AIK_SCRIPTS not set}"
-          cd "work/${AIK_SCRIPTS}"
+          cd "work/${{ env.AIK_SCRIPTS }}"
           bash repackimg.sh
           test -f image-new.img
           mv -f image-new.img ../../out/patched-recovery.img
@@ -118,3 +115,4 @@ jobs:
             work/out/*sha256*.txt
             work/out/*file*.txt
           if-no-files-found: error
+
