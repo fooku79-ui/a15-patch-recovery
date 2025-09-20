@@ -38,14 +38,11 @@ jobs:
           set -euxo pipefail
           URL="$(cat work/URL.txt)"
           cd work/in
-          # Keep remote name if present
           FNAME="$(basename "${URL%%\?*}")"
           [[ -z "$FNAME" || "$FNAME" = "/" ]] && FNAME="recovery.img"
           echo "Downloading: $URL -> $FNAME"
           curl -L --fail --retry 4 --connect-timeout 20 "$URL" -o "$FNAME"
-          echo "Downloaded file: $FNAME"
           file "$FNAME"
-          # Normalize to recovery.img (decompress if .lz4)
           case "$FNAME" in
             *.lz4|*.LZ4) lz4 -d -f "$FNAME" recovery.img ;;
             *)           cp -f "$FNAME" recovery.img      ;;
@@ -59,28 +56,31 @@ jobs:
           cd work
           git clone --depth=1 https://github.com/osm0sis/Android-Image-Kitchen.git AIK
 
+      # ✅ point at AIK/AIK-Linux
       - name: Unpack recovery with AIK
         run: |
           set -euxo pipefail
           cd work
-          cp -f in/recovery.img AIK/recovery.img
-          bash AIK/cleanup.sh || true
-          bash AIK/unpackimg.sh AIK/recovery.img
-          test -d AIK/ramdisk || { echo "Unpack failed: no ramdisk." >&2; exit 2; }
+          cp -f in/recovery.img AIK/AIK-Linux/recovery.img
+          bash AIK/AIK-Linux/cleanup.sh || true
+          bash AIK/AIK-Linux/unpackimg.sh AIK/AIK-Linux/recovery.img
+          test -d AIK/AIK-Linux/ramdisk || { echo "Unpack failed: no ramdisk." >&2; exit 2; }
 
+      # ✅ run your patch against AIK/AIK-Linux
       - name: Run patch script
         run: |
           set -euxo pipefail
           chmod +x scripts/enable_fastbootd.sh
-          ./scripts/enable_fastbootd.sh work/AIK
+          ./scripts/enable_fastbootd.sh work/AIK/AIK-Linux
 
+      # ✅ repack from AIK/AIK-Linux and move out
       - name: Repack recovery with AIK
         run: |
           set -euxo pipefail
-          cd work/AIK
+          cd work/AIK/AIK-Linux
           bash repackimg.sh
           test -f image-new.img
-          mv -f image-new.img ../out/patched-recovery.img
+          mv -f image-new.img ../../out/patched-recovery.img
 
       - name: Package outputs (IMG/TAR/ZIP)
         run: |
@@ -88,13 +88,10 @@ jobs:
           cd work/out
           BASENAME="${{ github.event.inputs.IMAGE_NAME }}"
           mv -f patched-recovery.img "${BASENAME}.img"
-          # Odin .tar (USTAR) with md5 appended
           tar --format=ustar -cf "${BASENAME}.tar" "${BASENAME}.img"
           md5sum -t "${BASENAME}.tar" | awk '{print $1}' > "${BASENAME}.tar.md5"
           cat "${BASENAME}.tar.md5" >> "${BASENAME}.tar"
-          # Bundle zip
           zip -9r "${BASENAME}.zip" "${BASENAME}.img" "${BASENAME}.tar"
-          # Include metadata
           cp -f ../recovery.sha256.txt .
           cp -f ../recovery.file.txt   .
 
