@@ -76,33 +76,40 @@ jobs:
           repository: osm0sis/Android-Image-Kitchen
           ref: AIK-Linux
           path: work/AIK
-          depth: 1
+          fetch-depth: 1
           
-      - name: Setup AIK-Linux binaries
+      - name: Build AIK-Linux binaries
         run: |
           set -euxo pipefail
           cd work/AIK
           
-          # The binaries should already be in the repository
-          # Just make them executable and verify they exist
-          if [ -d bin ]; then
-            chmod -R +x bin/ 2>/dev/null || true
+          # Install build dependencies
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc g++ make
+          
+          # Build the binaries
+          echo "🔧 Building AIK binaries..."
+          if [ -f Makefile ]; then
+            make
+          elif [ -d src ]; then
+            cd src
+            make
           else
-            echo "❌ bin directory not found in AIK" >&2
-            ls -la . >&2
+            # Manual build if no Makefile
+            echo "Building unpackbootimg..."
+            gcc -o bin/linux/x86_64/unpackbootimg src/unpackbootimg.c || \
+            gcc -o unpackbootimg unpackbootimg.c && mkdir -p bin/linux/x86_64 && mv unpackbootimg bin/linux/x86_64/
+          fi
+          
+          # Verify the binary was created
+          if [ ! -f bin/linux/x86_64/unpackbootimg ]; then
+            echo "❌ Failed to build unpackbootimg" >&2
             exit 1
           fi
           
-          # Check for the critical binary
-          UNPACK_BIN="bin/linux/x86_64/unpackbootimg"
-          if [ ! -f "$UNPACK_BIN" ]; then
-            echo "❌ Critical binary missing: $UNPACK_BIN" >&2
-            echo "Available files in bin:" >&2
-            find bin -type f 2>/dev/null | head -10 >&2 || echo "No files found" >&2
-            exit 1
-          fi
-          
-          echo "✅ AIK binaries verified and executable"
+          # Make executable
+          chmod +x bin/linux/x86_64/unpackbootimg
+          echo "✅ AIK binaries built successfully"
           
       - name: Unpack recovery
         run: |
