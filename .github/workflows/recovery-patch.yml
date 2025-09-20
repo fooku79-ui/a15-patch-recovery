@@ -14,6 +14,7 @@ on:
 jobs:
   patch-recovery:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -21,35 +22,90 @@ jobs:
 
       - name: Install tools
         run: |
+          set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y lz4 zip unzip tar md5sum
+          sudo apt-get install -y \
+            lz4 zip unzip tar coreutils p7zip-full git xz-utils gawk sed grep file
+
+      - name: Prepare workspace
+        run: |
+          set -euxo pipefail
+          mkdir -p work/in work/out
+          echo "${{ github.event.inputs.RECOVERY_URL }}" > work/URL.txt
 
       - name: Download recovery
         run: |
-          mkdir -p work
-          cd work
-          curl -L "${{ github.event.inputs.RECOVERY_URL }}" -o recovery.img.lz4 || \
-          curl -L "${{ github.event.inputs.RECOVERY_URL }}" -o recovery.img
-          if [ -f recovery.img.lz4 ]; then
-            lz4 -d recovery.img.lz4 recovery.img
-          fi
+          set -euxo pipefail
+          URL="$(cat work/URL.txt)"
+          cd work/in
+          # Keep remote name if present
+          FNAME="$(basename "${URL%%\?*}")"
+          [[ -z "$FNAME" || "$FNAME" = "/" ]] && FNAME="recovery.img"
+          echo "Downloading: $URL -> $FNAME"
+          curl -L --fail --retry 4 --connect-timeout 20 "$URL" -o "$FNAME"
+          echo "Downloaded file: $FNAME"
+          file "$FNAME"
+          # Normalize to recovery.img (decompress if .lz4)
+          case "$FNAME" in
+            *.lz4|*.LZ4) lz4 -d -f "$FNAME" recovery.img ;;
+            *)           cp -f "$FNAME" recovery.img      ;;
+          esac
+          sha256sum recovery.img | tee ../recovery.sha256.txt
+          file recovery.img       | tee ../recovery.file.txt
 
-      - name: Patch placeholder
+      - name: Fetch Android Image Kitchen (AIK)
         run: |
-          echo ">>> This is where enable_fastbootd.sh would modify ramdisk <<<"
-
-      - name: Package outputs
-        run: |
+          set -euxo pipefail
           cd work
+          git clone --depth=1 https://github.com/osm0sis/Android-Image-Kitchen.git AIK
+
+      - name: Unpack recovery with AIK
+        run: |
+          set -euxo pipefail
+          cd work
+          cp -f in/recovery.img AIK/recovery.img
+          bash AIK/cleanup.sh || true
+          bash AIK/unpackimg.sh AIK/recovery.img
+          test -d AIK/ramdisk || { echo "Unpack failed: no ramdisk." >&2; exit 2; }
+
+      - name: Run patch script
+        run: |
+          set -euxo pipefail
+          chmod +x scripts/enable_fastbootd.sh
+          ./scripts/enable_fastbootd.sh work/AIK
+
+      - name: Repack recovery with AIK
+        run: |
+          set -euxo pipefail
+          cd work/AIK
+          bash repackimg.sh
+          test -f image-new.img
+          mv -f image-new.img ../out/patched-recovery.img
+
+      - name: Package outputs (IMG/TAR/ZIP)
+        run: |
+          set -euxo pipefail
+          cd work/out
           BASENAME="${{ github.event.inputs.IMAGE_NAME }}"
-          cp recovery.img "${BASENAME}.img"
+          mv -f patched-recovery.img "${BASENAME}.img"
+          # Odin .tar (USTAR) with md5 appended
           tar --format=ustar -cf "${BASENAME}.tar" "${BASENAME}.img"
           md5sum -t "${BASENAME}.tar" | awk '{print $1}' > "${BASENAME}.tar.md5"
           cat "${BASENAME}.tar.md5" >> "${BASENAME}.tar"
+          # Bundle zip
           zip -9r "${BASENAME}.zip" "${BASENAME}.img" "${BASENAME}.tar"
+          # Include metadata
+          cp -f ../recovery.sha256.txt .
+          cp -f ../recovery.file.txt   .
 
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Patched-Recovery
-          path: work/*
+          path: |
+            work/out/*.img
+            work/out/*.tar
+            work/out/*.zip
+            work/out/*sha256*.txt
+            work/out/*file*.txt
+          if-no-files-found: error
