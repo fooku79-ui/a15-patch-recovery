@@ -7,7 +7,7 @@ on:
         description: "Direct download URL to recovery.img or recovery.img.lz4"
         required: true
       IMAGE_NAME:
-        description: "Base name for outputs (no extension). Defaults to 'patched-recovery'"
+        description: "Base name for outputs (no extension)"
         required: false
         default: "patched-recovery"
 
@@ -17,23 +17,27 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - name: Checkout
+      # Checkout your own repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install tools
+      # Install required tools
+      - name: Install dependencies
         run: |
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y \
             lz4 zip unzip tar coreutils p7zip-full git xz-utils gawk sed grep file curl openssl
 
-      - name: Prepare workspace
+      # Prepare workspace and save input URL
+      - name: Setup workspace
         run: |
           set -euxo pipefail
           mkdir -p work/in work/out
           echo "${{ github.event.inputs.RECOVERY_URL }}" > work/URL.txt
 
-      - name: Download recovery
+      # Download and decompress recovery image
+      - name: Download recovery image
         run: |
           set -euxo pipefail
           URL="$(cat work/URL.txt)"
@@ -50,15 +54,14 @@ jobs:
           sha256sum recovery.img | tee ../recovery.sha256.txt
           file recovery.img       | tee ../recovery.file.txt
 
-      # ⬇️ Fetch AIK-Linux using actions/checkout (avoids auth header issue)
-      - name: Fetch AIK-Linux
-        uses: actions/checkout@v4
-        with:
-          repository: osm0sis/AIK-Linux
-          path: work/AIK
-          fetch-depth: 1
+      # Clone AIK-Linux directly (avoids checkout issues)
+      - name: Clone AIK-Linux
+        run: |
+          set -euxo pipefail
+          git clone --depth=1 https://github.com/osm0sis/AIK-Linux.git work/AIK
 
-      - name: Unpack recovery with AIK
+      # Unpack recovery image
+      - name: Unpack recovery
         run: |
           set -euxo pipefail
           cd work/AIK
@@ -67,13 +70,15 @@ jobs:
           bash unpackimg.sh ./recovery.img
           test -d ramdisk || { echo "Unpack failed: no ramdisk." >&2; exit 2; }
 
-      - name: Run patch script
+      # Apply patch script
+      - name: Patch recovery
         run: |
           set -euxo pipefail
           chmod +x scripts/enable_fastbootd.sh
           ./scripts/enable_fastbootd.sh work/AIK
 
-      - name: Repack recovery with AIK
+      # Repack recovery image
+      - name: Repack recovery
         run: |
           set -euxo pipefail
           cd work/AIK
@@ -81,7 +86,8 @@ jobs:
           test -f image-new.img
           mv -f image-new.img ../out/patched-recovery.img
 
-      - name: Package outputs (IMG/TAR/ZIP)
+      # Package outputs
+      - name: Package outputs
         run: |
           set -euxo pipefail
           cd work/out
@@ -94,7 +100,8 @@ jobs:
           cp -f ../recovery.sha256.txt .
           cp -f ../recovery.file.txt   .
 
-      - name: Upload artifacts
+      # Upload artifacts
+      - name: Upload patched recovery
         uses: actions/upload-artifact@v4
         with:
           name: Patched-Recovery
