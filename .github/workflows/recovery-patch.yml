@@ -70,24 +70,28 @@ jobs:
           # Replace original for downstream steps
           mv -f recovery.raw.img recovery.img
           
-      - name: Clone AIK-Linux
+      - name: Download AIK-Linux
         run: |
           set -euxo pipefail
-          # Try multiple methods to clone AIK-Linux
-          if ! git clone --depth=1 https://github.com/osm0sis/AIK-Linux.git work/AIK; then
-            echo "🔄 Retrying clone with different method..."
-            sleep 5
-            git clone --depth=1 --config http.version=HTTP/1.1 https://github.com/osm0sis/AIK-Linux.git work/AIK || \
-            git clone --depth=1 --no-single-branch https://github.com/osm0sis/AIK-Linux.git work/AIK
-          fi
+          cd work
+          echo "📥 Downloading AIK-Linux as ZIP..."
+          curl -L --fail --retry 3 --connect-timeout 20 \
+            "https://github.com/osm0sis/AIK-Linux/archive/master.zip" -o AIK.zip
           
-          # Verify clone succeeded
-          if [ ! -d work/AIK ]; then
-            echo "❌ Failed to clone AIK-Linux repository" >&2
+          echo "📦 Extracting AIK-Linux..."
+          unzip -q AIK.zip
+          mv AIK-Linux-master AIK
+          rm AIK.zip
+          
+          # Verify download succeeded
+          if [ ! -d AIK ] || [ ! -f AIK/unpackimg.sh ]; then
+            echo "❌ Failed to download or extract AIK-Linux" >&2
             exit 1
           fi
           
-          echo "✅ AIK-Linux cloned successfully"
+          # Make scripts executable
+          chmod +x AIK/*.sh
+          echo "✅ AIK-Linux downloaded and extracted successfully"
           
       - name: Unpack recovery
         run: |
