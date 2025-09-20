@@ -1,55 +1,145 @@
-+ echo '✅ Valid Android recovery image confirmed.'
-✅ Valid Android recovery image confirmed.
-+ mv -f recovery.raw.img recovery.img
-1s
-Run actions/checkout@v4
-Syncing repository: osm0sis/Android-Image-Kitchen
-Getting Git version info
-Temporarily overriding HOME='/home/runner/work/_temp/1ca0e9d3-4369-40cb-951a-99efaa63faad' before making global git config changes
-Adding repository directory to the temporary git global config as a safe directory
-/usr/bin/git config --global --add safe.directory /home/runner/work/a15-patch-recovery/a15-patch-recovery/work/AIK
-Initializing the repository
-Disabling automatic garbage collection
-Setting up auth
-Fetching the repository
-Determining the checkout info
-/usr/bin/git sparse-checkout disable
-/usr/bin/git config --local --unset-all extensions.worktreeConfig
-Checking out the ref
-/usr/bin/git log -1 --format=%H
-f1ec4343ccf7016fe1c85bb4d3aa9a65bfae0871
-0s
-Run set -euxo pipefail
-+ cd work/AIK
-+ echo '🔧 Building AIK binaries...'
-+ '[' -f Makefile ']'
-🔧 Building AIK binaries...
-+ '[' -d src ']'
-+ echo '📄 Building unpackbootimg manually...'
-+ gcc -o unpackbootimg unpackbootimg.c
-📄 Building unpackbootimg manually...
-cc1: fatal error: unpackbootimg.c: No such file or directory
-compilation terminated.
-+ echo '❌ Failed to compile unpackbootimg'
-❌ Failed to compile unpackbootimg
-+ exit 1
-Error: Process completed with exit code 1.
-0s
-0s
-0s
-0s
-0s
-0s
-0s
-Post job cleanup.
-/usr/bin/git version
-git version 2.51.0
-Temporarily overriding HOME='/home/runner/work/_temp/766845c2-d337-4d7a-b240-9226a9bf9fa7' before making global git config changes
-Adding repository directory to the temporary git global config as a safe directory
-/usr/bin/git config --global --add safe.directory /home/runner/work/a15-patch-recovery/a15-patch-recovery
-/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
-/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
-/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
-http.https://github.com/.extraheader
-/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
-/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+name: Patch Android Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      RECOVERY_URL:
+        description: "Direct Google Drive download link (uc?export=download&id=...)"
+        required: true
+      IMAGE_NAME:
+        description: "Base name for output files (without extension)"
+        required: false
+        default: "patched-recovery"
+
+jobs:
+  patch-recovery:
+    name: Patch Recovery Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            lz4 zip unzip tar coreutils p7zip-full git xz-utils \
+            gawk sed grep file curl openssl
+
+      - name: Prepare Workspace
+        run: |
+          set -euxo pipefail
+          mkdir -p work/in work/out
+          echo "${{ github.event.inputs.RECOVERY_URL }}" > work/URL.txt
+
+      - name: Download & Validate Recovery Image
+        run: |
+          set -euxo pipefail
+          URL="$(cat work/URL.txt)"
+          cd work/in
+          echo "📥 Downloading: $URL"
+          curl -L --fail --retry 4 --connect-timeout 20 "$URL" -o recovery.img
+
+          echo "🔍 Checking file type..."
+          file recovery.img | tee ../recovery.file.txt
+          sha256sum recovery.img | tee ../recovery.sha256.txt
+
+          case "$(file -b recovery.img)" in
+            *LZ4*) 
+              echo "🧩 LZ4 compression detected. Decompressing..."
+              lz4 -d -f recovery.img recovery.raw.img
+              ;;
+            *)
+              echo "📦 No compression detected. Using as-is..."
+              cp recovery.img recovery.raw.img
+              ;;
+          esac
+
+          echo "🔍 Validating decompressed image..."
+          file recovery.raw.img | tee ../recovery.raw.file.txt
+
+          if ! file recovery.raw.img | grep -q -E "(Android boot|Android bootimg)"; then
+            echo "❌ Invalid Android recovery image." >&2
+            file -b recovery.raw.img >&2
+            exit 2
+          fi
+
+          echo "✅ Valid Android recovery image confirmed."
+          mv -f recovery.raw.img recovery.img
+
+      - name: Download AIK (Android Image Kitchen)
+        uses: actions/checkout@v4
+        with:
+          repository: osm0sis/Android-Image-Kitchen
+          ref: AIK-Linux
+          path: work/AIK
+          fetch-depth: 1
+
+      - name: Verify AIK Prebuilt Binary
+        run: |
+          set -euxo pipefail
+          AIK_BIN=work/AIK/bin/linux/x86_64/unpackbootimg
+          if [ ! -x "$AIK_BIN" ]; then
+            echo "❌ unpackbootimg binary missing or not executable at $AIK_BIN" >&2
+            exit 1
+          fi
+          chmod +x "$AIK_BIN"
+          echo "✅ unpackbootimg is ready to use"
+
+      - name: Unpack Recovery
+        run: |
+          set -euxo pipefail
+          cd work/AIK
+          cp ../in/recovery.img recovery.img
+          bash cleanup.sh || true
+          bash unpackimg.sh recovery.img
+
+          if [ ! -d ramdisk ]; then
+            echo "❌ Unpack failed: ramdisk directory missing." >&2
+            ls -la . >&2
+            exit 3
+          fi
+
+          echo "✅ Recovery unpacked successfully."
+
+      - name: Patch Recovery
+        run: |
+          set -euxo pipefail
+          SCRIPT="scripts/enable_fastbootd.sh"
+
+          if [ ! -f "$SCRIPT" ]; then
+            echo "❌ Patch script not found: $SCRIPT" >&2
+            exit 4
+          fi
+
+          chmod +x "$SCRIPT"
+          "./$SCRIPT" work/AIK
+          echo "✅ Patch applied successfully."
+
+      - name: Repack Recovery
+        run: |
+          set -euxo pipefail
+          cd work/AIK
+          bash repackimg.sh
+
+          if [ ! -f image-new.img ]; then
+            echo "❌ Repack failed: image-new.img not found." >&2
+            ls -la . >&2
+            exit 5
+          fi
+
+          mv image-new.img ../out/patched-recovery.img
+          echo "✅ Recovery repacked successfully."
+
+      - name: Package Output Files
+        run: |
+          set -euxo pipefail
+          cd work/out
+          BASENAME="${{ github.event.inputs.IMAGE_NAME }}"
+
+          mv patched-recovery.img "${BASENAME}.img"
+
+          tar -
